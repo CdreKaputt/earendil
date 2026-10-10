@@ -8,13 +8,14 @@ import (
 	"os"
 )
 
+// Config holds all runtime settings, read from the environment at startup.
 type Config struct {
 	DatabaseURL string
 	AdminAddr   string
 	LogLevel    slog.Level
 }
 
-// Load reads Config from enviroment variables. It reports every
+// Load reads Config from environment variables. It reports every
 // problem at once rather than stopping at the first.
 func Load() (Config, error) {
 	cfg := Config{
@@ -44,6 +45,10 @@ func Load() (Config, error) {
 	}
 	return cfg, nil
 }
+
+// Check to ensure Config includes LogValue() method
+// Config must satisfy slog.LogValuer so logging it never leaks passwords
+var _ slog.LogValuer = Config{}
 
 // LogValue implements slog.LogValuer, so logging a Config never
 // leaks the database password.
