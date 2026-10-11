@@ -1,0 +1,27 @@
+name: earendil
+
+services:
+  db:
+    image: postgres:18-alpine
+    environment: 
+      POSTGRES_USER: earendil
+      POSTGRES_PASSWORD: earendil
+      POSTGRES_DB: earendil
+    ports:
+      - "127.0.0.1:5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U earendil -d earendil"]
+      interval: 2s
+      timeout: 5s
+      retries: 15
+
+  mailpit:
+    image: axllent/mailpit:v1.31
+    ports:
+      - "127.0.0.1:1025:1025"
+      - "127.0.0.1:8025:8025"
+
+volumes:
+  pgdata:
