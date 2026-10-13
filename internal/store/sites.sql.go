@@ -9,6 +9,28 @@ import (
 	"context"
 )
 
+const getLatestSiteConfig = `-- name: GetLatestSiteConfig :one
+SELECT site_id, version, config, content_hash, source, git_sha, created_at FROM site_config_versions
+WHERE site_id = $1
+ORDER BY version DESC
+LIMIT 1
+`
+
+func (q *Queries) GetLatestSiteConfig(ctx context.Context, siteID string) (SiteConfigVersion, error) {
+	row := q.db.QueryRow(ctx, getLatestSiteConfig, siteID)
+	var i SiteConfigVersion
+	err := row.Scan(
+		&i.SiteID,
+		&i.Version,
+		&i.Config,
+		&i.ContentHash,
+		&i.Source,
+		&i.GitSha,
+		&i.CreatedAt,
+	)
+	return i, err
+}
+
 const getSite = `-- name: GetSite :one
 SELECT id, active, managed_by, allowed_recipient_domains, max_recipients, rate_limit_per_hour, created_at, updated_at FROM sites
 WHERE id = $1
