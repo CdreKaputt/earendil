@@ -5,7 +5,7 @@ export GOOSE_DRIVER 	   := postgres
 export GOOSE_DBSTRING 	   := $(DATABASE_URL)
 export GOOSE_MIGRATION_DIR := migrations
 
-.PHONY: db-up db-down db-reset db-psql migrate-up migrate-down migrate-status migrate-new splc test vet run
+.PHONY: db-up db-down db-reset db-psql migrate-up migrate-down migrate-status migrate-new sqlc sqlc-check test vet run
 
 db-up:
 	docker compose up -d --wait
