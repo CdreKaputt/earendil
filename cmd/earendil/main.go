@@ -7,8 +7,10 @@ import (
 	"os"
 	"os/signal"
 	"syscall"
+	"time"
 
 	"github.com/CdreKaputt/earendil/internal/config"
+	"github.com/jackc/pgx/v5/pgxpool"
 )
 
 func main() {
@@ -30,6 +32,21 @@ func run(ctx context.Context) error {
 
 	ctx, stop := signal.NotifyContext(ctx, os.Interrupt, syscall.SIGTERM)
 	defer stop()
+
+	// Create db connection pool to pass to goroutines
+	pool, err := pgxpool.New(ctx, cfg.DatabaseURL)
+	if err != nil {
+		return fmt.Errorf("creating database pool: %w", err)
+	}
+	defer pool.Close()
+
+	// Use Ping to test db connection at startup.
+	// Fail fast if connection invalid
+	pingCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+	if err := pool.Ping(pingCtx); err != nil {
+		return fmt.Errorf("connecting to database: %w", err)
+	}
 
 	logger.Info("earendil starting", "config", cfg)
 
