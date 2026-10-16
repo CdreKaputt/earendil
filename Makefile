@@ -36,6 +36,9 @@ migrate-new:
 sqlc:
 	go tool sqlc generate
 
+sqlc-check:
+	go tool sqlc diff
+
 test:
 	go test ./...
 
