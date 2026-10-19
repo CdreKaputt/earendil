@@ -188,3 +188,43 @@ func TestAcceptRejectsUnroutable(t *testing.T) {
 		})
 	}
 }
+
+func TestAcceptRollsBackWhenNotificationInsertFails(t *testing.T) {
+	svc, pool := newTestService(t)
+	siteID := createSite(t, pool, "owner@example.com", "boom@example.com")
+	ctx := t.Context()
+
+	// register PostgreSQL function and trigger to reject boom@example.com
+	if _, err := pool.Exec(ctx,
+		`CREATE FUNCTION fail_on_boom() RETURNS trigger
+		LANGUAGE plpgsql AS $$
+		BEGIN
+			RAISE EXCEPTION 'forced failure for %', NEW.recipient;
+		END
+		$$;
+		CREATE TRIGGER fail_on_boom
+			BEFORE INSERT ON notifications
+			FOR EACH ROW
+			WHEN (NEW.recipient = 'boom@example.com')
+			EXECUTE FUNCTION fail_on_boom();`); err != nil {
+		t.Fatalf("creating fail_on_boom function and trigger: %v", err)
+	}
+	// drop trigger and function after test runs or fails
+	t.Cleanup(func() {
+		ctx := context.Background()
+		_, err := pool.Exec(ctx,
+			`DROP TRIGGER fail_on_boom ON notifications;
+			DROP FUNCTION fail_on_boom();`)
+		if err != nil {
+			t.Errorf("dropping fail_on_boom function and trigger: %v", err)
+		}
+	})
+
+	sub := newSubmission(siteID, "contact")
+	if _, err := svc.Accept(ctx, sub); err == nil {
+		t.Errorf("Accept() error = nil, want an error")
+	}
+	if got := countRows(t, pool, `SELECT count(*) FROM entries WHERE idempotency_key = $1`, sub.IdempotencyKey); got != 0 {
+		t.Errorf("entries count = %d, want 0", got)
+	}
+}
