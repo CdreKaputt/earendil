@@ -6,10 +6,12 @@ import (
 	"errors"
 	"log/slog"
 	"os"
+	"slices"
 	"testing"
 	"time"
 	"uuid"
 
+	"github.com/CdreKaputt/earendil/internal/store"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
@@ -224,7 +226,111 @@ func TestAcceptRollsBackWhenNotificationInsertFails(t *testing.T) {
 	if _, err := svc.Accept(ctx, sub); err == nil {
 		t.Errorf("Accept() error = nil, want an error")
 	}
+	// No separate notifications check: notifications.entry_id is a foreign
+	// key to entries, so with no entry there can be no notification rows.
 	if got := countRows(t, pool, `SELECT count(*) FROM entries WHERE idempotency_key = $1`, sub.IdempotencyKey); got != 0 {
 		t.Errorf("entries count = %d, want 0", got)
+	}
+}
+
+func TestAllowedRecipients(t *testing.T) {
+	// testSite may email any address at example.com, up to 3 per entry.
+	testSite := store.Site{
+		AllowedRecipientDomains: []string{"example.com"},
+		MaxRecipients:           3,
+	}
+
+	tests := []struct {
+		name         string
+		site         store.Site
+		recipients   []string
+		wantAllowed  []string
+		wantRejected []string
+	}{
+		{
+			name:        "allowed address is lowercased",
+			site:        testSite,
+			recipients:  []string{"Owner@Example.COM"},
+			wantAllowed: []string{"owner@example.com"},
+		},
+		{
+			// Rejected addresses keep their original form so the
+			// warning log matches what is written in the config.
+			name:         "disallowed domain is rejected as written",
+			site:         testSite,
+			recipients:   []string{"owner@example.com", " Lead@Evil.com"},
+			wantAllowed:  []string{"owner@example.com"},
+			wantRejected: []string{" Lead@Evil.com"},
+		},
+		{
+			name:         "subdomain of an allowed domain is rejected",
+			site:         testSite,
+			recipients:   []string{"lead@mail.example.com"},
+			wantRejected: []string{"lead@mail.example.com"},
+		},
+		{
+			name:         "lookalike domain is rejected",
+			site:         testSite,
+			recipients:   []string{"lead@example.com.evil.com"},
+			wantRejected: []string{"lead@example.com.evil.com"},
+		},
+		{
+			name:        "duplicates differing by case and whitespace collapse to one",
+			site:        testSite,
+			recipients:  []string{" owner@example.com ", "OWNER@Example.Com", "owner@example.com"},
+			wantAllowed: []string{"owner@example.com"},
+		},
+		{
+			name:         "address with no @ or a leading @ is rejected",
+			site:         testSite,
+			recipients:   []string{"ownerexample.com", "@example.com"},
+			wantRejected: []string{"ownerexample.com", "@example.com"},
+		},
+		{
+			name:         "recipients beyond MaxRecipients are rejected",
+			site:         testSite,
+			recipients:   []string{"a@example.com", "B@example.com", "c@example.com", "d@example.com"},
+			wantAllowed:  []string{"a@example.com", "b@example.com", "c@example.com"},
+			wantRejected: []string{"d@example.com"},
+		},
+		{
+			// Deduplication runs before the limit check, so a repeat of an
+			// address that was already allowed is dropped silently, not
+			// counted as rejected.
+			name: "duplicate after the limit is dropped, not rejected",
+			site: store.Site{
+				AllowedRecipientDomains: []string{"example.com"},
+				MaxRecipients:           1,
+			},
+			recipients:   []string{"a@example.com", "b@example.com", "A@example.com"},
+			wantAllowed:  []string{"a@example.com"},
+			wantRejected: []string{"b@example.com"},
+		},
+		{
+			name: "uppercase allowed domain still matches",
+			site: store.Site{
+				AllowedRecipientDomains: []string{"EXAMPLE.COM"},
+				MaxRecipients:           1,
+			},
+			recipients:  []string{"owner@example.com"},
+			wantAllowed: []string{"owner@example.com"},
+		},
+		{
+			name:       "no recipients returns nothing",
+			site:       testSite,
+			recipients: nil,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			allowed, rejected := allowedRecipients(tt.recipients, tt.site)
+			if !slices.Equal(allowed, tt.wantAllowed) {
+				t.Errorf("allowedRecipients() allowed = %q, want %q", allowed, tt.wantAllowed)
+			}
+			if !slices.Equal(rejected, tt.wantRejected) {
+				t.Errorf("allowedRecipients() rejected = %q, want %q", rejected, tt.wantRejected)
+			}
+		})
 	}
 }
