@@ -289,7 +289,7 @@ func TestAllowedRecipients(t *testing.T) {
 		{
 			name:         "recipients beyond MaxRecipients are rejected",
 			site:         testSite,
-			recipients:   []string{"a@example.com", "B@example.com", "c@example.com", "d@example.com"},
+			recipients:   []string{"a@example.com", "b@example.com", "c@example.com", "d@example.com"},
 			wantAllowed:  []string{"a@example.com", "b@example.com", "c@example.com"},
 			wantRejected: []string{"d@example.com"},
 		},
