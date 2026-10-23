@@ -1,3 +1,5 @@
+// Package consumer pulls form submissions off a queue and hands them
+// to ingest. It acks a message only after the submission is stored.
 package consumer
 
 import (
@@ -13,7 +15,7 @@ import (
 
 // Message is one queue message, as returned by Queue.Pull
 type Message struct {
-	LeaseID  string
+	LeaseID  string // used by Cloudflare's pull API
 	Body     []byte
 	Attempts int
 }
@@ -24,7 +26,8 @@ type Queue interface {
 	Ack(ctx context.Context, acks, retries []string) error
 }
 
-// Accepter stores a submission and *ingest.Service satisfies it
+// Accepter stores a submission.
+// *ingest.Service satisfies Accepter but mock accepters can be used for testing.
 type Accepter interface {
 	Accept(ctx context.Context, sub ingest.Submission) (ingest.EntryID, error)
 }
@@ -79,8 +82,8 @@ func (c *Consumer) processBatch(ctx context.Context) (int, error) {
 
 // messageBody is the JSON contract site Workers send.
 type messageBody struct {
-	SiteID         string          `json:"siteID"`
-	FormID         string          `json:"formID"`
+	SiteID         string          `json:"siteId"`
+	FormID         string          `json:"formId"`
 	IdempotencyKey uuid.UUID       `json:"idempotencyKey"`
 	Fields         json.RawMessage `json:"fields"`
 	ReceivedAt     time.Time       `json:"receivedAt"`
