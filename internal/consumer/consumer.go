@@ -34,21 +34,39 @@ type Accepter interface {
 
 // Consumer moves messages from a Queue into an Accepter
 type Consumer struct {
-	queue      Queue
-	accepter   Accepter
-	logger     *slog.Logger
-	batchSize  int
-	visibility time.Duration
+	queue        Queue
+	accepter     Accepter
+	logger       *slog.Logger
+	batchSize    int
+	visibility   time.Duration
+	pollInterval time.Duration
 }
 
 // New returns a Consumer with default batch settings.
 func New(q Queue, a Accepter, logger *slog.Logger) *Consumer {
 	return &Consumer{
-		queue:      q,
-		accepter:   a,
-		logger:     logger,
-		batchSize:  10,
-		visibility: 30 * time.Second,
+		queue:        q,
+		accepter:     a,
+		logger:       logger,
+		batchSize:    10,
+		visibility:   30 * time.Second,
+		pollInterval: 5 * time.Second,
+	}
+}
+
+func (c *Consumer) Run(ctx context.Context) error {
+	c.logger.Info("consumer started")
+	for {
+		if _, err := c.processBatch(ctx); err != nil {
+			c.logger.Error("processing batch", "err", err)
+		}
+
+		select {
+		case <-ctx.Done():
+			c.logger.Info("consumer stopped")
+			return nil
+		case <-time.After(c.pollInterval):
+		}
 	}
 }
 

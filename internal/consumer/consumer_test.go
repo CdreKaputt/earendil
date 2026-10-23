@@ -110,3 +110,19 @@ func TestProcessBatchRetriesRejectedMessages(t *testing.T) {
 		t.Errorf("retries = %q, want [lease-1]", q.retries)
 	}
 }
+
+func TestRunProcessesBatchAndStopsOnCancel(t *testing.T) {
+	q := &fakeQueue{messages: []Message{{LeaseID: "lease-1", Body: []byte(validBody)}}}
+	a := &fakeAccepter{}
+	c := newTestConsumer(t, q, a)
+
+	ctx, cancel := context.WithCancel(t.Context())
+	cancel() // cancel right away. Run() still makes one cycle
+
+	if err := c.Run(ctx); err != nil {
+		t.Fatalf("Run() error = %v, want nil", err)
+	}
+	if !slices.Equal(q.acks, []string{"lease-1"}) {
+		t.Errorf("acks = %q, want [lease-1]", q.acks)
+	}
+}
