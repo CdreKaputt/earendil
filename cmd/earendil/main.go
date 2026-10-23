@@ -9,8 +9,12 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/CdreKaputt/earendil/internal/config"
 	"github.com/jackc/pgx/v5/pgxpool"
+
+	"github.com/CdreKaputt/earendil/internal/config"
+	"github.com/CdreKaputt/earendil/internal/consumer"
+	"github.com/CdreKaputt/earendil/internal/devqueue"
+	"github.com/CdreKaputt/earendil/internal/ingest"
 )
 
 func main() {
@@ -48,9 +52,17 @@ func run(ctx context.Context) error {
 		return fmt.Errorf("connecting to database: %w", err)
 	}
 
+	// queue for testing only; replace with Cloudflare queue later
+	queue := devqueue.New()
+	queue.Push(devqueue.SampleBody("dev-site"))
+
+	cons := consumer.New(queue, ingest.New(pool, logger), logger)
+
 	logger.Info("earendil starting", "config", cfg)
 
-	<-ctx.Done() // wait here until a signal arrives
+	if err := cons.Run(ctx); err != nil {
+		return fmt.Errorf("running consumer: %w", err)
+	}
 
 	logger.Info("shutting down")
 	return nil

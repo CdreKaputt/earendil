@@ -5,7 +5,7 @@ export GOOSE_DRIVER 	   := postgres
 export GOOSE_DBSTRING 	   := $(DATABASE_URL)
 export GOOSE_MIGRATION_DIR := migrations
 
-.PHONY: db-up db-down db-reset db-psql migrate-up migrate-down migrate-status migrate-new sqlc sqlc-check test vet run
+.PHONY: db-up db-down db-reset db-psql migrate-up migrate-down migrate-status migrate-new sqlc sqlc-check seed test vet run
 
 db-up:
 	docker compose up -d --wait
@@ -39,11 +39,14 @@ sqlc:
 sqlc-check:
 	go tool sqlc diff
 
+seed:
+	docker compose exec -T db psql -v ON_ERROR_STOP=1 -U earendil -d earendil < dev/seed.sql
+
 test:
 	go test ./...
 
 vet:
 	go vet ./...
 
-run: 
+run:
 	go run ./cmd/earendil
