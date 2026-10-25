@@ -126,3 +126,59 @@ func TestRunProcessesBatchAndStopsOnCancel(t *testing.T) {
 		t.Errorf("acks = %q, want [lease-1]", q.acks)
 	}
 }
+
+func TestProcessBatchRetriesMalformedMessageWithoutBlockingOthers(t *testing.T) {
+	q := &fakeQueue{messages: []Message{
+		{LeaseID: "lease-1", Body: []byte(validBody)},
+		{LeaseID: "lease-2", Body: []byte(`not json`)},
+		{LeaseID: "lease-3", Body: []byte(validBody)},
+	}}
+	a := &fakeAccepter{}
+	c := newTestConsumer(t, q, a)
+
+	n, err := c.processBatch(t.Context())
+	if err != nil {
+		t.Fatalf("processBatch() error = %v", err)
+	}
+	if n != 3 {
+		t.Errorf("processBatch() = %d, want 3", n)
+	}
+	if len(a.got) != 2 {
+		t.Errorf("Accept called %d times, want 2 (malformed body must not reach Accept)", len(a.got))
+	}
+	if !slices.Equal(q.acks, []string{"lease-1", "lease-3"}) {
+		t.Errorf("acks = %q, want [lease-1 lease-3]", q.acks)
+	}
+	if !slices.Equal(q.retries, []string{"lease-2"}) {
+		t.Errorf("retries = %q, want [lease-2]", q.retries)
+	}
+}
+
+func TestHandleRejectsUndecodableBodies(t *testing.T) {
+	tests := []struct {
+		name string
+		body string
+	}{
+		{"empty body", ``},
+		{"not json", `not json`},
+		{"json array", `[]`},
+		{"invalid idempotency key", `{"idempotencyKey": "not-a-uuid"}`},
+		{"invalid timestamp", `{"receivedAt": "yesterday"}`},
+		{"wrong field type", `{"siteId": 42}`},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			a := &fakeAccepter{}
+			c := newTestConsumer(t, &fakeQueue{}, a)
+
+			err := c.handle(t.Context(), Message{LeaseID: "lease-1", Body: []byte(tt.body)})
+			if err == nil {
+				t.Errorf("handle() error = nil, want a decoding error")
+			}
+			if len(a.got) != 0 {
+				t.Errorf("Accept alled %d times, want 0", len(a.got))
+			}
+		})
+	}
+}
