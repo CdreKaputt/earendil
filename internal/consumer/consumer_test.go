@@ -5,7 +5,9 @@ import (
 	"errors"
 	"log/slog"
 	"slices"
+	"sync/atomic"
 	"testing"
+	"testing/synctest"
 	"time"
 	"uuid"
 
@@ -14,6 +16,7 @@ import (
 
 // fakeQueue returns its messages on the first Pull and records acks
 type fakeQueue struct {
+	pulls    atomic.Int32 // atomic avoids race condition during testing
 	messages []Message
 	acks     []string
 	retries  []string
@@ -22,6 +25,7 @@ type fakeQueue struct {
 var _ Queue = (*fakeQueue)(nil)
 
 func (q *fakeQueue) Pull(ctx context.Context, batchSize int, visibility time.Duration) ([]Message, error) {
+	q.pulls.Add(1)
 	msgs := q.messages
 	q.messages = nil
 	return msgs, nil
@@ -181,4 +185,75 @@ func TestHandleRejectsUndecodableBodies(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestNextWait(t *testing.T) {
+	c := newTestConsumer(t, &fakeQueue{}, &fakeAccepter{})
+	c.batchSize = 10
+	c.minWait = 5 * time.Second
+	c.maxWait = 60 * time.Second
+	errPull := errors.New("pull failed")
+
+	tests := []struct {
+		name   string
+		prev   time.Duration
+		pulled int
+		err    error
+		want   time.Duration
+	}{
+		{"full batch pulls again at once", 20 * time.Second, 10, nil, 0},
+		{"partial batch resets to min", 40 * time.Second, 3, nil, 5 * time.Second},
+		{"first empty batch waits min", 0, 0, nil, 5 * time.Second},
+		{"empty batch doubles", 5 * time.Second, 0, nil, 10 * time.Second},
+		{"empty batch is capped", 40 * time.Second, 0, nil, 60 * time.Second},
+		{"error backs off like empty", 10 * time.Second, 0, errPull, 20 * time.Second},
+		{"error after full batch waits min", 0, 0, errPull, 5 * time.Second},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := c.nextWait(tt.prev, tt.pulled, tt.err); got != tt.want {
+				t.Errorf("nextWait(%v, %d, %v), = %v, want %v", tt.prev, tt.pulled, tt.err, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestRunBacksOffWhileQueueIsEmpty(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		q := &fakeQueue{}
+		c := newTestConsumer(t, q, &fakeAccepter{})
+
+		ctx, cancel := context.WithCancel(t.Context())
+		done := make(chan error)
+		go func() { done <- c.Run(ctx) }()
+
+		// Pulls happen at 0s, then after waits of 5s, 10s, 20s, 40s, 60s, 60s:
+		// t = 0, 5, 15, 35, 75, 135, 195.
+		checks := []struct {
+			at    time.Duration
+			pulls int32
+		}{
+			{0, 1},
+			{5 * time.Second, 2},
+			{15 * time.Second, 3},
+			{35 * time.Second, 4},
+			{75 * time.Second, 5},
+			{135 * time.Second, 6},
+			{195 * time.Second, 7},
+		}
+		start := time.Now()
+		for _, check := range checks {
+			time.Sleep(check.at - time.Since(start))
+			synctest.Wait()
+			if got := q.pulls.Load(); got != check.pulls {
+				t.Errorf("after %v: pulls = %d, want %d", check.at, got, check.pulls)
+			}
+		}
+
+		cancel()
+		if err := <-done; err != nil {
+			t.Errorf("Run() error = %v, want nil", err)
+		}
+	})
 }

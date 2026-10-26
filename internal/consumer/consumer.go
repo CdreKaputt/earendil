@@ -34,39 +34,65 @@ type Accepter interface {
 
 // Consumer moves messages from a Queue into an Accepter
 type Consumer struct {
-	queue        Queue
-	accepter     Accepter
-	logger       *slog.Logger
-	batchSize    int
-	visibility   time.Duration
-	pollInterval time.Duration
+	queue      Queue
+	accepter   Accepter
+	logger     *slog.Logger
+	batchSize  int
+	visibility time.Duration
+	minWait    time.Duration
+	maxWait    time.Duration
 }
 
 // New returns a Consumer with default batch settings.
 func New(q Queue, a Accepter, logger *slog.Logger) *Consumer {
 	return &Consumer{
-		queue:        q,
-		accepter:     a,
-		logger:       logger,
-		batchSize:    10,
-		visibility:   30 * time.Second,
-		pollInterval: 5 * time.Second,
+		queue:      q,
+		accepter:   a,
+		logger:     logger,
+		batchSize:  10,
+		visibility: 30 * time.Second,
+		minWait:    5 * time.Second,
+		maxWait:    60 * time.Second,
 	}
 }
 
+// Run processes batches until ctx is cancled. It pulls again at once
+// after a full batch and backs off while the queue is empty. It returns
+// nil on a clean shutdown.
 func (c *Consumer) Run(ctx context.Context) error {
 	c.logger.Info("consumer started")
+	var wait time.Duration
 	for {
-		if _, err := c.processBatch(ctx); err != nil {
+		n, err := c.processBatch(ctx)
+		if err != nil {
 			c.logger.Error("processing batch", "err", err)
 		}
+		wait = c.nextWait(wait, n, err)
 
 		select {
 		case <-ctx.Done():
 			c.logger.Info("consumer stopped")
 			return nil
-		case <-time.After(c.pollInterval):
+		case <-time.After(wait):
 		}
+	}
+}
+
+// nextWait returns how long to wait before the next pull, given the
+// previous wait and the outcome of the batch just processed:
+//   - full batch: no wait, more messages are probably queued
+//   - partial batch: minWait, the queue was just drained
+//   - empty batch or error: double the previous wait, up to maxWait
+func (c *Consumer) nextWait(prev time.Duration, pulled int, err error) time.Duration {
+	switch {
+	case err == nil && pulled >= c.batchSize:
+		return 0
+	case err == nil && pulled > 0:
+		return c.minWait
+	case prev == 0:
+		return c.minWait
+	default:
+		return min(prev*2, c.maxWait)
 	}
 }
 
