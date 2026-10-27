@@ -7,6 +7,7 @@ package store
 
 import (
 	"context"
+	"time"
 )
 
 const insertNotification = `-- name: InsertNotification :exec
@@ -21,5 +22,69 @@ type InsertNotificationParams struct {
 
 func (q *Queries) InsertNotification(ctx context.Context, arg InsertNotificationParams) error {
 	_, err := q.db.Exec(ctx, insertNotification, arg.EntryID, arg.Recipient)
+	return err
+}
+
+const listDueNotifications = `-- name: ListDueNotifications :many
+SELECT n.id, n.recipient, n.attempts,
+       e.site_id, e.form_id, e.fields, e.received_at,
+       c.config
+FROM notifications n
+JOIN entries e ON e.id = n.entry_id
+JOIN site_config_versions c
+  ON c.site_id = e.site_id AND c.version = e.config_version
+WHERE n.status = 'pending' AND n.next_attempt_at <= now()
+ORDER BY n.next_attempt_at
+LIMIT $1
+`
+
+type ListDueNotificationsRow struct {
+	ID         int64
+	Recipient  string
+	Attempts   int32
+	SiteID     string
+	FormID     string
+	Fields     []byte
+	ReceivedAt time.Time
+	Config     []byte
+}
+
+func (q *Queries) ListDueNotifications(ctx context.Context, limit int32) ([]ListDueNotificationsRow, error) {
+	rows, err := q.db.Query(ctx, listDueNotifications, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ListDueNotificationsRow
+	for rows.Next() {
+		var i ListDueNotificationsRow
+		if err := rows.Scan(
+			&i.ID,
+			&i.Recipient,
+			&i.Attempts,
+			&i.SiteID,
+			&i.FormID,
+			&i.Fields,
+			&i.ReceivedAt,
+			&i.Config,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const markNotificationSent = `-- name: MarkNotificationSent :exec
+UPDATE notifications
+SET status = 'sent', sent_at = now(), updated_at = now()
+WHERE id = $1
+`
+
+func (q *Queries) MarkNotificationSent(ctx context.Context, id int64) error {
+	_, err := q.db.Exec(ctx, markNotificationSent, id)
 	return err
 }
